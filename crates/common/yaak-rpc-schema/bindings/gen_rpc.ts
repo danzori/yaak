@@ -133,7 +133,7 @@ export type CmdGitWorktreeStatusReq = { dir: string, };
 
 export type CmdGrpcGoReq = { requestId: string, environmentId: string | null, protoFiles: Array<string>, };
 
-export type CmdGrpcReflectReq = { requestId: string, environmentId: string | null, protoFiles: Array<string>, };
+export type CmdGrpcReflectReq = { requestId: string, environmentId: string | null, protoFiles: Array<string>, streamId: string, };
 
 export type CmdGrpcRequestActionsReq = Record<string, never>;
 

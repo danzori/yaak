@@ -1,3 +1,4 @@
+use crate::ReflectLog;
 use crate::any::collect_any_types;
 use crate::client::AutoReflectionClient;
 use crate::editions;
@@ -28,9 +29,10 @@ use yaak_tls::ClientCertificateConfig;
 pub async fn fill_pool_from_files(
     config: &GrpcConfig,
     paths: &Vec<PathBuf>,
+    log: &ReflectLog,
 ) -> Result<DescriptorPool> {
     if let Some(buf_root) = find_buf_workspace(paths)? {
-        return fill_pool_from_buf(config, paths, &buf_root).await;
+        return fill_pool_from_buf(config, paths, &buf_root, log).await;
     }
 
     let random_file_name = format!("{}.desc", uuid::Uuid::new_v4());
@@ -93,7 +95,7 @@ pub async fn fill_pool_from_files(
         args.push(p);
     }
 
-    info!("Invoking protoc with {}", args.join(" "));
+    log.log(format!("Invoking protoc with {}", args.join(" ")));
 
     let mut cmd = new_xplatform_command(&config.protoc_bin_path);
     cmd.args(&args);
@@ -121,6 +123,7 @@ async fn fill_pool_from_buf(
     config: &GrpcConfig,
     paths: &[PathBuf],
     buf_root: &Path,
+    log: &ReflectLog,
 ) -> Result<DescriptorPool> {
     let desc_path = temp_dir().join(format!("{}.desc", uuid::Uuid::new_v4()));
     let desc_path = dunce::simplified(desc_path.as_path()).to_path_buf();
@@ -139,7 +142,7 @@ async fn fill_pool_from_buf(
         }
     }
 
-    info!("Invoking buf build in {}", buf_root.display());
+    log.log(format!("Invoking buf build in {}", buf_root.display()));
 
     let out = cmd.output().await.map_err(|e| GenericError(format!("Failed to run buf: {}", e)))?;
 
@@ -201,11 +204,13 @@ pub async fn fill_pool_from_reflection(
     validate_certificates: bool,
     client_cert: Option<ClientCertificateConfig>,
     max_message_size: usize,
+    log: &ReflectLog,
 ) -> Result<DescriptorPool> {
     let mut pool = DescriptorPool::new();
     let mut client =
         AutoReflectionClient::new(uri, validate_certificates, client_cert, max_message_size)?;
 
+    log.log(format!("Listing services from {}", uri));
     for service in list_services(&mut client, metadata).await? {
         if service == "grpc.reflection.v1alpha.ServerReflection" {
             continue;
@@ -213,7 +218,7 @@ pub async fn fill_pool_from_reflection(
         if service == "grpc.reflection.v1.ServerReflection" {
             continue;
         }
-        debug!("Fetching descriptors for {}", service);
+        log.log(format!("Fetching descriptors for {}", service));
         file_descriptor_set_from_service_name(&service, &mut pool, &mut client, metadata).await;
     }
 
@@ -739,7 +744,13 @@ service Shop { rpc Buy(Req) returns (Req); }
 "#,
         );
 
-        let pool = fill_pool_from_files(&config, &vec![root.join("proto/acme/v1")]).await.unwrap();
+        let pool = fill_pool_from_files(
+            &config,
+            &vec![root.join("proto/acme/v1")],
+            &ReflectLog::default(),
+        )
+        .await
+        .unwrap();
         let price = pool.get_message_by_name("acme.v1.Req").unwrap().get_field_by_name("price");
         assert!(price.unwrap().is_group());
         assert!(pool.get_service_by_name("acme.v1.Shop").is_some());

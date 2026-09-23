@@ -1,6 +1,7 @@
 use prost_reflect::{DynamicMessage, MethodDescriptor, SerializeOptions};
 use serde::{Deserialize, Serialize};
 use serde_json::Deserializer;
+use std::sync::Arc;
 
 mod any;
 mod client;
@@ -14,6 +15,23 @@ mod transport;
 
 pub use tonic::Code;
 pub use tonic::metadata::*;
+
+#[derive(Clone, Default)]
+pub struct ReflectLog(Option<Arc<dyn Fn(String) + Send + Sync>>);
+
+impl ReflectLog {
+    pub fn new(sink: impl Fn(String) + Send + Sync + 'static) -> Self {
+        Self(Some(Arc::new(sink)))
+    }
+
+    pub(crate) fn log(&self, message: impl Into<String>) {
+        let message = message.into();
+        log::info!("{message}");
+        if let Some(sink) = &self.0 {
+            sink(message);
+        }
+    }
+}
 
 pub fn serialize_options() -> SerializeOptions {
     SerializeOptions::new().skip_default_fields(false)

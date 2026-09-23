@@ -10,10 +10,11 @@ import {
   stateExtensions,
   updateSchema,
 } from "codemirror-json-schema";
+import { useAtomValue } from "jotai";
 import type { JSONSchema7 } from "json-schema";
 import type { ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { ReflectResponseService } from "../hooks/useGrpc";
+import { grpcReflectLogsAtom, type ReflectResponseService } from "../hooks/useGrpc";
 import { wasUpdatedExternally } from "../hooks/useRequestUpdateKey";
 import { showAlert } from "../lib/alert";
 import { showConfirm } from "../lib/confirm";
@@ -233,6 +234,18 @@ export function GrpcEditor({
               onSelect: handleReloadSchema,
             },
             {
+              label: "View Schema Logs",
+              leftSlot: <Icon icon="square_terminal" />,
+              onSelect: () => {
+                showDialog({
+                  title: "Schema Logs",
+                  size: "lg",
+                  id: "grpc-reflect-logs",
+                  render: () => <GrpcReflectLogs requestId={request.id} />,
+                });
+              },
+            },
+            {
               label: protoFiles.length > 0 ? "Select Proto Files\u2026" : "Configure Schema\u2026",
               leftSlot: <Icon icon="settings" />,
               onSelect: () => {
@@ -278,6 +291,7 @@ export function GrpcEditor({
       reflectionError,
       reflectionLoading,
       reflectionUnavailable,
+      request.id,
       services,
     ],
   );
@@ -297,6 +311,15 @@ export function GrpcEditor({
         stateKey={`grpc_message.${request.id}`}
         {...extraEditorProps}
       />
+    </div>
+  );
+}
+
+function GrpcReflectLogs({ requestId }: { requestId: string }) {
+  const logs = useAtomValue(grpcReflectLogsAtom)[requestId] ?? [];
+  return (
+    <div className="pb-4 max-h-[60vh] overflow-y-auto font-mono text-xs text-text-subtle whitespace-pre-wrap select-text">
+      {logs.length === 0 ? "No logs yet." : logs.map((line, i) => <div key={i}>{line}</div>)}
     </div>
   );
 }

@@ -425,10 +425,12 @@ async fn cmd_grpc_reflect<R: Runtime>(
     ctx: ClientCtx<R>,
     req: CmdGrpcReflectReq,
 ) -> Result<Vec<ServiceDefinition>> {
+    let on_log = stream_emitter(&ctx, &req.stream_id);
     Ok(crate::cmd_grpc_reflect(
         &req.request_id,
         req.environment_id.as_deref(),
         req.proto_files,
+        yaak_grpc::ReflectLog::new(on_log),
         ctx.window.clone(),
         ctx.window.app_handle().clone(),
         ctx.window.app_handle().state::<Mutex<GrpcHandle>>(),

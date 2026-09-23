@@ -6,11 +6,11 @@ use crate::reflection::{
     reflect_types_for_dynamic_message, reflect_types_for_message,
 };
 use crate::transport::get_transport;
-use crate::{MethodDefinition, ServiceDefinition, json_schema};
+use crate::{MethodDefinition, ReflectLog, ServiceDefinition, json_schema};
 use hyper_rustls::HttpsConnector;
 use hyper_util::client::legacy::Client;
 use hyper_util::client::legacy::connect::HttpConnector;
-use log::{info, warn};
+use log::warn;
 pub use prost_reflect::DynamicMessage;
 use prost_reflect::ReflectMessage;
 use prost_reflect::prost::Message;
@@ -393,6 +393,7 @@ impl GrpcHandle {
         validate_certificates: bool,
         client_cert: Option<ClientCertificateConfig>,
         request_message_size: i32,
+        log: &ReflectLog,
     ) -> Result<bool> {
         let server_reflection = proto_files.is_empty();
         let key = make_pool_key(id, uri, proto_files);
@@ -410,10 +411,11 @@ impl GrpcHandle {
                 validate_certificates,
                 client_cert,
                 message_size_limit(request_message_size),
+                log,
             )
             .await
         } else {
-            fill_pool_from_files(&self.config, proto_files).await
+            fill_pool_from_files(&self.config, proto_files, log).await
         }?;
 
         self.pools.insert(key, pool.clone());
@@ -429,10 +431,11 @@ impl GrpcHandle {
         validate_certificates: bool,
         client_cert: Option<ClientCertificateConfig>,
         request_message_size: i32,
+        log: &ReflectLog,
     ) -> Result<Vec<ServiceDefinition>> {
         // Ensure we have a pool; reflect only if missing
         if self.get_pool(id, uri, proto_files).is_none() {
-            info!("Reflecting gRPC services for {} at {}", id, uri);
+            log.log(format!("Reflecting gRPC services for {} at {}", id, uri));
             self.reflect(
                 id,
                 uri,
@@ -441,6 +444,7 @@ impl GrpcHandle {
                 validate_certificates,
                 client_cert,
                 request_message_size,
+                log,
             )
             .await?;
         }
@@ -448,7 +452,9 @@ impl GrpcHandle {
         let pool = self
             .get_pool(id, uri, proto_files)
             .ok_or(GenericError("Failed to get pool".to_string()))?;
-        Ok(self.services_from_pool(&pool))
+        let services = self.services_from_pool(&pool);
+        log.log(format!("Loaded {} service(s)", services.len()));
+        Ok(services)
     }
 
     fn services_from_pool(&self, pool: &DescriptorPool) -> Vec<ServiceDefinition> {
@@ -495,6 +501,7 @@ impl GrpcHandle {
                 validate_certificates,
                 client_cert.clone(),
                 request_message_size,
+                &ReflectLog::default(),
             )
             .await?;
         }

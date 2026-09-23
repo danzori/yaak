@@ -34,7 +34,7 @@ use yaak_commands::responses::locate_response_body;
 use yaak_common::command::new_checked_command;
 use yaak_crypto::manager::EncryptionManager;
 use yaak_grpc::manager::{GrpcConfig, GrpcHandle};
-use yaak_grpc::{Code, ServiceDefinition};
+use yaak_grpc::{Code, ReflectLog, ServiceDefinition};
 use yaak_mac_window::AppHandleMacWindowExt;
 use yaak_models::models::{
     CookieJar, Environment, GrpcConnection, GrpcConnectionState, GrpcEvent, GrpcEventType,
@@ -234,6 +234,7 @@ async fn cmd_grpc_reflect<R: Runtime>(
     request_id: &str,
     environment_id: Option<&str>,
     proto_files: Vec<String>,
+    log: ReflectLog,
     window: WebviewWindow<R>,
     app_handle: AppHandle<R>,
     grpc_handle: State<'_, Mutex<GrpcHandle>>,
@@ -286,6 +287,7 @@ async fn cmd_grpc_reflect<R: Runtime>(
             resolved_settings.validate_certificates.value,
             client_certificate,
             resolved_settings.request_message_size.value,
+            &log,
         )
         .await
         .map_err(|e| GenericError(e.to_string()))?)

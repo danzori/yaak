@@ -7,11 +7,14 @@ import { minPromiseMillis } from "../lib/minPromiseMillis";
 import { rpc } from "../lib/rpc";
 import { activeEnvironmentIdAtom, useActiveEnvironment } from "./useActiveEnvironment";
 import { useDebouncedValue } from "@yaakapp-internal/ui";
+import { atom } from "jotai";
 
 export interface ReflectResponseService {
   name: string;
   methods: { name: string; schema: string; serverStreaming: boolean; clientStreaming: boolean }[];
 }
+
+export const grpcReflectLogsAtom = atom<Record<string, string[]>>({});
 
 export function useGrpc(
   req: GrpcRequest | null,
@@ -60,10 +63,27 @@ export function useGrpc(
     refetchOnReconnect: false,
     queryFn: () => {
       const environmentId = jotaiStore.get(activeEnvironmentIdAtom);
-      return minPromiseMillis<ReflectResponseService[]>(
-        rpc("cmd_grpc_reflect", { requestId, protoFiles, environmentId }),
-        300,
-      );
+      const setLogs = (update: (logs: string[]) => string[]) =>
+        jotaiStore.set(grpcReflectLogsAtom, (all) => ({
+          ...all,
+          [requestId]: update(all[requestId] ?? []),
+        }));
+      setLogs(() => []);
+      const reflect = platform
+        .rpcStream<ReflectResponseService[], string>(
+          "cmd_grpc_reflect",
+          { requestId, protoFiles, environmentId },
+          (line) => setLogs((logs) => [...logs, line]),
+        )
+        .then(({ result, unlisten }) => {
+          unlisten();
+          return result;
+        })
+        .catch((err) => {
+          setLogs((logs) => [...logs, `Error: ${err}`]);
+          throw err;
+        });
+      return minPromiseMillis<ReflectResponseService[]>(reflect, 300);
     },
   });
 

@@ -137,6 +137,7 @@ pub struct CmdGrpcReflectReq {
     pub request_id: String,
     pub environment_id: Option<String>,
     pub proto_files: Vec<String>,
+    pub stream_id: String,
 }
 
 #[derive(Debug, Deserialize, TS)]
