@@ -1,6 +1,19 @@
 const path = require("node:path");
-const { chmodSync, copyFileSync, existsSync, mkdirSync, statSync } = require("node:fs");
-const { execFileSync } = require("node:child_process");
+const os = require("node:os");
+const {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} = require("node:fs");
+const { execSync } = require("node:child_process");
+const { extractArchive } = require("./extract-archive.cjs");
 
 const VERSION = "1.72.0";
 const targetArch = process.env.YAAK_TARGET_ARCH ?? process.arch;
@@ -31,47 +44,77 @@ const destinationDirectory = path.join(
   "buf",
 );
 const destination = path.join(destinationDirectory, destinationName);
+const stampPath = path.join(destinationDirectory, ".version");
+const stamp = `${packageName}@${VERSION}`;
 
-if (existsSync(destination) && readVersion(destination) === VERSION) {
-  console.log(`Buf ${VERSION} already vendored for ${targetKey}`);
-  return;
-}
+(async () => {
+  if (existsSync(destination) && readStamp() === stamp) {
+    console.log(`Buf ${VERSION} already vendored for ${targetKey}`);
+    return;
+  }
 
-let packageDirectory;
-try {
-  packageDirectory = path.dirname(require.resolve(`${packageName}/package.json`));
-} catch (error) {
-  throw new Error(
-    `${packageName} is not installed. Run npm install on the target platform before vendoring Buf.`,
-    { cause: error },
-  );
-}
-
-const source = [
-  path.join(packageDirectory, executableName),
-  path.join(packageDirectory, "bin", executableName),
-].find((candidate) => existsSync(candidate));
-
-if (source == null) {
-  throw new Error(`Could not find ${executableName} in ${packageDirectory}`);
-}
-
-mkdirSync(destinationDirectory, { recursive: true });
-copyFileSync(source, destination);
-if (process.platform !== "win32") {
-  chmodSync(destination, statSync(destination).mode | 0o700);
-}
-
-const actualVersion = readVersion(destination);
-if (actualVersion !== VERSION) {
-  throw new Error(`Unexpected Buf version ${actualVersion}; expected ${VERSION}`);
-}
-
-console.log(`Vendored Buf ${VERSION} for ${targetKey} to ${destination}`);
-
-function readVersion(binary) {
+  const tmpDir = mkdtempSync(path.join(os.tmpdir(), "yaak-buf-"));
   try {
-    return execFileSync(binary, ["--version"], { encoding: "utf8" }).trim();
+    const packageDirectory = findInstalledPackage() ?? (await downloadPackage(tmpDir));
+
+    const packageVersion = JSON.parse(
+      readFileSync(path.join(packageDirectory, "package.json"), "utf8"),
+    ).version;
+    if (packageVersion !== VERSION) {
+      throw new Error(`Unexpected ${packageName} version ${packageVersion}; expected ${VERSION}`);
+    }
+
+    const source = [
+      path.join(packageDirectory, executableName),
+      path.join(packageDirectory, "bin", executableName),
+    ].find((candidate) => existsSync(candidate));
+    if (source == null) {
+      throw new Error(`Could not find ${executableName} in ${packageDirectory}`);
+    }
+
+    mkdirSync(destinationDirectory, { recursive: true });
+    copyFileSync(source, destination);
+    if (process.platform !== "win32") {
+      chmodSync(destination, statSync(destination).mode | 0o755);
+    }
+    writeFileSync(stampPath, stamp);
+
+    console.log(`Vendored Buf ${VERSION} for ${targetKey} to ${destination}`);
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+})().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});
+
+function findInstalledPackage() {
+  try {
+    const directory = path.dirname(require.resolve(`${packageName}/package.json`));
+    const { version } = JSON.parse(readFileSync(path.join(directory, "package.json"), "utf8"));
+    return version === VERSION ? directory : null;
+  } catch {
+    return null;
+  }
+}
+
+async function downloadPackage(tmpDir) {
+  console.log(`Downloading ${packageName}@${VERSION} from npm`);
+  execSync(`npm pack ${packageName}@${VERSION} --pack-destination "${tmpDir}" --silent`, {
+    stdio: ["ignore", "ignore", "inherit"],
+  });
+  const tarball = readdirSync(tmpDir).find((name) => name.endsWith(".tgz"));
+  if (tarball == null) {
+    throw new Error(`npm pack did not produce a tarball for ${packageName}`);
+  }
+  const extractDir = path.join(tmpDir, "extract");
+  await extractArchive(path.join(tmpDir, tarball), extractDir);
+  return path.join(extractDir, "package");
+}
+
+function readStamp() {
+  try {
+    return readFileSync(stampPath, "utf8").trim();
   } catch {
     return null;
   }
