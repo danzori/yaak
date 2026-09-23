@@ -97,4 +97,4 @@ jobs:
           args: >-
             ${{ matrix.args }}
             --config ./tauri.release.conf.json
-            --config '{"build":{"features":["wry"]},"bundle":{"createUpdaterArtifacts":false,"windows":{"signCommand":null}}}'
+            --config '{"build":{"features":["wry"]},"app":{"security":{"capabilities":["default"]}},"bundle":{"createUpdaterArtifacts":false,"windows":{"signCommand":null}}}'
