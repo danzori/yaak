@@ -148,7 +148,13 @@ async fn list_services(
 
     let list_services_response = match response {
         MessageResponse::ListServicesResponse(resp) => resp,
-        _ => panic!("Expected a ListServicesResponse variant"),
+        MessageResponse::ErrorResponse(e) => {
+            return Err(GenericError(format!(
+                "Server reflection error listing services: {} ({})",
+                e.error_message, e.error_code,
+            )));
+        }
+        _ => return Err(GenericError("Expected a ListServicesResponse variant".to_string())),
     };
 
     Ok(list_services_response.service.iter().map(|s| s.name.clone()).collect::<Vec<_>>())
@@ -176,7 +182,17 @@ async fn file_descriptor_set_from_service_name(
 
     let file_descriptor_response = match response {
         MessageResponse::FileDescriptorResponse(resp) => resp,
-        _ => panic!("Expected a FileDescriptorResponse variant"),
+        MessageResponse::ErrorResponse(e) => {
+            warn!(
+                "Server reflection error for service {}: {} ({})",
+                service_name, e.error_message, e.error_code,
+            );
+            return;
+        }
+        _ => {
+            warn!("Expected a FileDescriptorResponse variant for service {}", service_name);
+            return;
+        }
     };
 
     add_file_descriptors_to_pool(
@@ -224,7 +240,17 @@ pub(crate) async fn reflect_types_for_message(
         };
         let files = match resp {
             MessageResponse::FileDescriptorResponse(resp) => resp.file_descriptor_proto,
-            _ => panic!("Expected a FileDescriptorResponse variant"),
+            MessageResponse::ErrorResponse(e) => {
+                warn!(
+                    "Server reflection error for @type \"{}\": {} ({})",
+                    extra_type, e.error_message, e.error_code,
+                );
+                continue;
+            }
+            _ => {
+                warn!("Expected a FileDescriptorResponse variant for @type \"{}\"", extra_type);
+                continue;
+            }
         };
 
         {
@@ -271,7 +297,20 @@ pub(crate) async fn reflect_types_for_dynamic_message(
         };
         let files = match resp {
             MessageResponse::FileDescriptorResponse(resp) => resp.file_descriptor_proto,
-            _ => panic!("Expected a FileDescriptorResponse variant"),
+            MessageResponse::ErrorResponse(e) => {
+                warn!(
+                    "Server reflection error for response @type \"{}\": {} ({})",
+                    extra_type, e.error_message, e.error_code,
+                );
+                continue;
+            }
+            _ => {
+                warn!(
+                    "Expected a FileDescriptorResponse variant for response @type \"{}\"",
+                    extra_type,
+                );
+                continue;
+            }
         };
 
         {
@@ -325,7 +364,13 @@ pub(crate) async fn add_file_descriptors_to_pool(
     let mut fd_mapping = std::collections::HashMap::with_capacity(fds.len());
 
     for fd in fds {
-        let fdp = FileDescriptorProto::decode(fd.deref()).unwrap();
+        let fdp = match FileDescriptorProto::decode(fd.deref()) {
+            Ok(fdp) => fdp,
+            Err(e) => {
+                warn!("Failed to decode file descripto: {e}");
+                continue;
+            }
+        };
 
         topo_sort.insert(fdp.name().to_string(), fdp.dependency.clone());
         fd_mapping.insert(fdp.name().to_string(), fdp);
@@ -335,12 +380,17 @@ pub(crate) async fn add_file_descriptors_to_pool(
         match node {
             Ok(node) => {
                 if let Some(fdp) = fd_mapping.remove(&node) {
-                    pool.add_file_descriptor_proto(fdp).expect("add file descriptor proto");
+                    if let Err(e) = pool.add_file_descriptor_proto(fdp) {
+                        warn!("Failed to add file descriptor for {node}: {e}");
+                    }
                 } else {
                     file_descriptor_set_by_filename(node.as_str(), pool, client, metadata).await;
                 }
             }
-            Err(_) => panic!("proto file got cycle!"),
+            Err(_) => {
+                warn!("Cycle detected in proto dependencies");
+                break;
+            }
         }
     }
 }
@@ -360,8 +410,16 @@ async fn file_descriptor_set_by_filename(
     let response = client.send_reflection_request(msg, metadata).await;
     let file_descriptor_response = match response {
         Ok(MessageResponse::FileDescriptorResponse(resp)) => resp,
+        Ok(MessageResponse::ErrorResponse(e)) => {
+            warn!(
+                "Server reflection error for {}: {} ({})",
+                filename, e.error_message, e.error_code,
+            );
+            return;
+        }
         Ok(_) => {
-            panic!("Expected a FileDescriptorResponse variant")
+            warn!("Expected a FileDescriptorResponse variant for {}", filename);
+            return;
         }
         Err(e) => {
             warn!("Error fetching file descriptor for {}: {:?}", filename, e);
