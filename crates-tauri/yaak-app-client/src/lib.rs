@@ -1354,7 +1354,12 @@ pub fn run() {
                 .path()
                 .resolve(format!("vendored/protoc/{}", protoc_bin_name), BaseDirectory::Resource)
                 .expect("failed to resolve yaakprotoc binary");
-            let grpc_config = GrpcConfig { protoc_include_dir, protoc_bin_path };
+            let buf_bin_name = if cfg!(windows) { "yaakbuf.exe" } else { "yaakbuf" };
+            let buf_bin_path = app
+                .path()
+                .resolve(format!("vendored/buf/{}", buf_bin_name), BaseDirectory::Resource)
+                .expect("failed to resolve yaakbuf binary");
+            let grpc_config = GrpcConfig { protoc_include_dir, protoc_bin_path, buf_bin_path };
             let grpc_handle = GrpcHandle::new(grpc_config);
             app.manage(Mutex::new(grpc_handle));
 

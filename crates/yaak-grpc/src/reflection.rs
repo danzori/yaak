@@ -29,6 +29,10 @@ pub async fn fill_pool_from_files(
     config: &GrpcConfig,
     paths: &Vec<PathBuf>,
 ) -> Result<DescriptorPool> {
+    if let Some(buf_root) = find_buf_workspace(paths)? {
+        return fill_pool_from_buf(config, paths, &buf_root).await;
+    }
+
     let random_file_name = format!("{}.desc", uuid::Uuid::new_v4());
     let desc_path = temp_dir().join(random_file_name);
 
@@ -111,6 +115,84 @@ pub async fn fill_pool_from_files(
     fs::remove_file(desc_path).await?;
 
     Ok(pool)
+}
+
+async fn fill_pool_from_buf(
+    config: &GrpcConfig,
+    paths: &[PathBuf],
+    buf_root: &Path,
+) -> Result<DescriptorPool> {
+    let desc_path = temp_dir().join(format!("{}.desc", uuid::Uuid::new_v4()));
+    let desc_path = dunce::simplified(desc_path.as_path()).to_path_buf();
+
+    let mut cmd = new_xplatform_command(&config.buf_bin_path);
+    cmd.current_dir(buf_root)
+        .args(["build", ".", "--as-file-descriptor-set", "--output"])
+        .arg(&desc_path);
+
+    for path in paths.iter().filter(|p| p.exists()) {
+        let canonical = dunce::canonicalize(path)?;
+        // Paths were matched against this workspace, so they are always inside it
+        let relative = canonical.strip_prefix(buf_root).unwrap_or(&canonical);
+        if !relative.as_os_str().is_empty() {
+            cmd.arg("--path").arg(relative);
+        }
+    }
+
+    info!("Invoking buf build in {}", buf_root.display());
+
+    let out = cmd.output().await.map_err(|e| GenericError(format!("Failed to run buf: {}", e)))?;
+
+    if !out.status.success() {
+        let _ = fs::remove_file(&desc_path).await;
+        return Err(GenericError(format!(
+            "buf build failed with status {}: {}",
+            out.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&out.stderr)
+        )));
+    }
+
+    let bytes = fs::read(&desc_path).await?;
+    fs::remove_file(&desc_path).await?;
+    Ok(DescriptorPool::decode(editions::lower_file_descriptor_set(&bytes)?.as_slice())?)
+}
+
+fn find_buf_workspace(paths: &[PathBuf]) -> Result<Option<PathBuf>> {
+    let roots: Vec<Option<PathBuf>> = paths
+        .iter()
+        .filter(|p| p.exists())
+        .map(|p| find_buf_root(if p.is_dir() { p } else { p.parent().unwrap_or(p) }))
+        .collect();
+
+    let Some(root) = roots.iter().flatten().next().cloned() else {
+        return Ok(None);
+    };
+    if roots.iter().any(|r| r.as_ref() != Some(&root)) {
+        return Err(GenericError(format!(
+            "All proto paths must belong to the Buf workspace at {}",
+            root.display()
+        )));
+    }
+    Ok(Some(root))
+}
+
+fn find_buf_root(start: &Path) -> Option<PathBuf> {
+    let start = dunce::canonicalize(start).ok()?;
+    let mut nearest_buf_yaml = None;
+
+    for dir in start.ancestors() {
+        if dir.join("buf.work.yaml").is_file() {
+            return Some(dir.to_path_buf());
+        }
+        if nearest_buf_yaml.is_none() && dir.join("buf.yaml").is_file() {
+            nearest_buf_yaml = Some(dir.to_path_buf());
+        }
+        if dir.join(".git").exists() {
+            break;
+        }
+    }
+
+    nearest_buf_yaml
 }
 
 pub async fn fill_pool_from_reflection(
@@ -588,5 +670,80 @@ fn find_parent_proto_dir(start_path: impl AsRef<Path>) -> Option<PathBuf> {
         }
 
         dir = parent.to_path_buf();
+    }
+}
+
+#[cfg(test)]
+mod buf_tests {
+    use super::*;
+
+    fn write(path: &Path, contents: &str) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, contents).unwrap();
+    }
+
+    fn temp_workspace() -> PathBuf {
+        let dir = temp_dir().join(format!("yaak-buf-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // Stop the upward config search inside the temp dir
+        std::fs::create_dir(dir.join(".git")).unwrap();
+        dunce::canonicalize(dir).unwrap()
+    }
+
+    #[test]
+    fn finds_buf_workspace_root() {
+        let root = temp_workspace();
+        write(&root.join("buf.work.yaml"), "version: v1\ndirectories: [a, b]\n");
+        write(&root.join("a/buf.yaml"), "version: v1\n");
+        write(&root.join("a/x.proto"), "");
+        write(&root.join("b/buf.yaml"), "version: v1\n");
+        write(&root.join("c/y.proto"), "");
+
+        // v1: buf.work.yaml wins over the module's own buf.yaml
+        let paths = vec![root.join("a/x.proto"), root.join("b")];
+        assert_eq!(find_buf_workspace(&paths).unwrap(), Some(root.clone()));
+
+        // No Buf config at all
+        std::fs::remove_file(root.join("buf.work.yaml")).unwrap();
+        assert_eq!(find_buf_workspace(&[root.join("c/y.proto")]).unwrap(), None);
+
+        // Mixing Buf and non-Buf paths is rejected
+        assert!(find_buf_workspace(&[root.join("a"), root.join("c/y.proto")]).is_err());
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn builds_editions_pool_with_buf() {
+        let vendored = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../crates-tauri/yaak-app-client/vendored");
+        let config = GrpcConfig {
+            protoc_include_dir: vendored.join("protoc/include"),
+            protoc_bin_path: vendored.join("protoc/yaakprotoc"),
+            buf_bin_path: vendored.join("buf/yaakbuf"),
+        };
+
+        let root = temp_workspace();
+        write(&root.join("buf.yaml"), "version: v2\nmodules:\n  - path: proto\n");
+        write(
+            &root.join("proto/acme/common/money.proto"),
+            "edition = \"2024\";\npackage acme.common;\nmessage Money { int64 units = 1; }\n",
+        );
+        write(
+            &root.join("proto/acme/v1/shop.proto"),
+            r#"edition = "2023";
+package acme.v1;
+import "acme/common/money.proto";
+message Req { acme.common.Money price = 1 [features.message_encoding = DELIMITED]; }
+service Shop { rpc Buy(Req) returns (Req); }
+"#,
+        );
+
+        let pool = fill_pool_from_files(&config, &vec![root.join("proto/acme/v1")]).await.unwrap();
+        let price = pool.get_message_by_name("acme.v1.Req").unwrap().get_field_by_name("price");
+        assert!(price.unwrap().is_group());
+        assert!(pool.get_service_by_name("acme.v1.Shop").is_some());
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

@@ -99,6 +99,7 @@
     "bootstrap:build": "npm run build",
     "bootstrap:vendor": "npm run vendor",
     "vendor": "run-p vendor:*",
+    "vendor:vendor-buf": "node scripts/vendor-buf.cjs",
     "vendor:vendor-plugins": "node scripts/vendor-plugins.cjs",
     "vendor:vendor-protoc": "node scripts/vendor-protoc.cjs",
     "vendor:vendor-node": "node scripts/vendor-node.cjs",
@@ -121,6 +122,7 @@
     "@codemirror/legacy-modes": "^6.5.2"
   },
   "devDependencies": {
+    "@bufbuild/buf": "1.72.0",
     "@rolldown/plugin-babel": "^0.2.3",
     "@tailwindcss/postcss": "^4.3.2",
     "@tauri-apps/cli": "npm:@tauri-apps/cli-cef@3.0.0-alpha.6",

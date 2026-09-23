@@ -361,6 +361,8 @@ pub struct GrpcConfig {
     pub protoc_include_dir: PathBuf,
     /// Path to the yaakprotoc sidecar binary
     pub protoc_bin_path: PathBuf,
+    /// Path to the vendored Buf CLI binary
+    pub buf_bin_path: PathBuf,
 }
 
 pub struct GrpcHandle {

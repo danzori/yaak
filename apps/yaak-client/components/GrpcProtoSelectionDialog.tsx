@@ -64,7 +64,7 @@ function GrpcProtoSelectionDialogWithRequest({ request }: Props & { request: Grp
           color="primary"
           onClick={async () => {
             const selected = await platform.dialog.open({
-              title: "Select Proto Directory",
+              title: "Select Proto or Buf Workspace Directory",
               directory: true,
             });
             if (selected == null) return;
@@ -73,7 +73,7 @@ function GrpcProtoSelectionDialogWithRequest({ request }: Props & { request: Grp
             await grpc.reflect.refetch();
           }}
         >
-          Add Import Folders
+          Add Proto / Buf Directory
         </Button>
         <Button
           isLoading={grpc.reflect.isFetching}

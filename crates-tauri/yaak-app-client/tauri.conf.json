@@ -41,6 +41,7 @@
       "vendored/plugins",
       "vendored/plugin-runtime",
       "vendored/node/yaaknode*",
+      "vendored/buf/yaakbuf*",
       "vendored/protoc/yaakprotoc*"
     ]
   }
