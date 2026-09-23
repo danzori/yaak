@@ -5,6 +5,7 @@ use serde_json::Deserializer;
 mod any;
 mod client;
 mod codec;
+mod editions;
 pub mod error;
 mod json_schema;
 pub mod manager;

@@ -1,5 +1,6 @@
 use crate::any::collect_any_types;
 use crate::client::AutoReflectionClient;
+use crate::editions;
 use crate::error::Error::GenericError;
 use crate::error::Result;
 use crate::manager::GrpcConfig;
@@ -8,7 +9,7 @@ use async_recursion::async_recursion;
 use log::{debug, info, warn};
 use prost::Message;
 use prost_reflect::{DescriptorPool, DynamicMessage, MethodDescriptor, ReflectMessage, Value};
-use prost_types::{FileDescriptorProto, FileDescriptorSet};
+use prost_types::FileDescriptorProto;
 use std::collections::{BTreeMap, HashSet};
 use std::env::temp_dir;
 use std::ops::Deref;
@@ -28,7 +29,6 @@ pub async fn fill_pool_from_files(
     config: &GrpcConfig,
     paths: &Vec<PathBuf>,
 ) -> Result<DescriptorPool> {
-    let mut pool = DescriptorPool::new();
     let random_file_name = format!("{}.desc", uuid::Uuid::new_v4());
     let desc_path = temp_dir().join(random_file_name);
 
@@ -106,8 +106,7 @@ pub async fn fill_pool_from_files(
     }
 
     let bytes = fs::read(desc_path).await?;
-    let fdp = FileDescriptorSet::decode(bytes.deref())?;
-    pool.add_file_descriptor_set(fdp)?;
+    let pool = DescriptorPool::decode(editions::lower_file_descriptor_set(&bytes)?.as_slice())?;
 
     fs::remove_file(desc_path).await?;
 
@@ -367,20 +366,22 @@ pub(crate) async fn add_file_descriptors_to_pool(
         let fdp = match FileDescriptorProto::decode(fd.deref()) {
             Ok(fdp) => fdp,
             Err(e) => {
-                warn!("Failed to decode file descripto: {e}");
+                warn!("Failed to decode file descriptor: {e}");
                 continue;
             }
         };
 
         topo_sort.insert(fdp.name().to_string(), fdp.dependency.clone());
-        fd_mapping.insert(fdp.name().to_string(), fdp);
+        fd_mapping.insert(fdp.name().to_string(), fd);
     }
 
     for node in topo_sort {
         match node {
             Ok(node) => {
-                if let Some(fdp) = fd_mapping.remove(&node) {
-                    if let Err(e) = pool.add_file_descriptor_proto(fdp) {
+                if let Some(fd) = fd_mapping.remove(&node) {
+                    let added = editions::lower_file_descriptor_proto(&fd)
+                        .and_then(|fd| Ok(pool.decode_file_descriptor_proto(fd.as_slice())?));
+                    if let Err(e) = added {
                         warn!("Failed to add file descriptor for {node}: {e}");
                     }
                 } else {
